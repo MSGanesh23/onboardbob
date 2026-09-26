@@ -107,6 +107,7 @@ class DocDriftResponse(BaseModel):
     ai_summary: str = ""
     ai_doc_suggestions: list = []
     ai_issue_breakdown: list = []
+    ai_setup_guide: list = []
 
 
 # ---------------------------------------------------------------------------

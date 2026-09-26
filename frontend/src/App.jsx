@@ -79,6 +79,7 @@ export default function App() {
   const [aiSummary, setAiSummary] = useState(null)
   const [driftScore, setDriftScore] = useState(null)
   const [missingDocs, setMissingDocs] = useState(null)
+  const [setupGuide, setSetupGuide] = useState(null)
   const [entryPoints, setEntryPoints] = useState(null)
   const [tourSteps, setTourSteps] = useState(null)
   const [issue, setIssue] = useState(null)
@@ -120,7 +121,8 @@ export default function App() {
         scanData.ai_summary || driftData.ai_summary || null
       )
       setDriftScore(driftData.drift_score ?? driftData.driftScore ?? null)
-      setMissingDocs(driftData.missing_docs ?? driftData.missingDocs ?? [])
+      setMissingDocs(driftData.missing_docstrings ?? driftData.missing_docs ?? driftData.missingDocs ?? [])
+      setSetupGuide(driftData.ai_setup_guide ?? [])
       // Prefer top-level response fields, then knowledge_graph sub-keys
       setEntryPoints(scanData.entry_points ?? (scanData.knowledge_graph ?? {}).entry_points ?? null)
       setTourSteps(scanData.tour_steps ?? (scanData.knowledge_graph ?? {}).tour_steps ?? null)
@@ -181,45 +183,37 @@ export default function App() {
         </div>
       )}
 
-      {/* Gemini AI summary banner */}
-      {aiSummary && (
-        <div className="max-w-7xl mx-auto w-full px-6 mt-4">
-          <div className="flex items-start gap-3 text-xs bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3">
-            <span className="shrink-0 flex items-center gap-1 font-semibold text-violet-300 border border-violet-500/30 rounded px-2 py-0.5 bg-violet-600/10">
-              ✦ Powered by Gemini AI
-            </span>
-            <p className="text-slate-300 leading-relaxed">{aiSummary}</p>
-          </div>
+
+      {/* Dashboard — 4-section vertical layout */}
+      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6 space-y-5">
+        {/* Section 1 (Top Center): Architecture Graph — centered full-width */}
+        <div className="w-full min-h-[420px]">
+          <ArchitectureGraph graph={graph} svgImage={svgImage} />
         </div>
-      )}
 
-      {/* Dashboard grid */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 h-full">
-          {/* Architecture Graph — spans 2 columns */}
-          <div className="lg:col-span-2 min-h-[420px]">
-            <ArchitectureGraph graph={graph} svgImage={svgImage} />
-          </div>
+        {/* Section 2 (Middle): AI Onboarding Plan & Project Setup Guide */}
+        <div className="w-full min-h-[320px]">
+          <OnboardingChecklist
+            entryPoints={entryPoints}
+            tourSteps={tourSteps}
+            aiSummary={aiSummary}
+            setupGuide={setupGuide}
+          />
+        </div>
 
-          {/* Doc Drift */}
-          <div className="min-h-[420px]">
-            <DocDriftCard driftScore={driftScore} missingDocs={missingDocs} />
-          </div>
+        {/* Section 3 (Lower Middle): Documentation Drift Health */}
+        <div className="w-full min-h-[360px]">
+          <DocDriftCard driftScore={driftScore} missingDocs={missingDocs} />
+        </div>
 
-          {/* Onboarding Checklist */}
-          <div className="lg:col-span-2 min-h-[320px]">
-            <OnboardingChecklist entryPoints={entryPoints} tourSteps={tourSteps} />
-          </div>
-
-          {/* Issue Navigator */}
-          <div className="min-h-[320px]">
-            <IssueNavigator
-              issue={issue}
-              impactedFiles={impactedFiles}
-              onExecuteFix={handleExecuteFix}
-              fixResult={fixResult}
-            />
-          </div>
+        {/* Section 4 (Bottom): GitHub Issue Spec, Impacted Files, Execute Fix */}
+        <div className="w-full min-h-[280px]">
+          <IssueNavigator
+            issue={issue}
+            impactedFiles={impactedFiles}
+            onExecuteFix={handleExecuteFix}
+            fixResult={fixResult}
+          />
         </div>
       </main>
 

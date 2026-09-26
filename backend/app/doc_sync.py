@@ -98,6 +98,7 @@ class DriftReport:
     ai_summary: str = ""
     ai_doc_suggestions: list[str] = field(default_factory=list)
     ai_issue_breakdown: list[str] = field(default_factory=list)
+    ai_setup_guide: list[str] = field(default_factory=list)   # step-by-step setup extracted from README
 
     def to_dict(self) -> dict:
         return {
@@ -115,6 +116,7 @@ class DriftReport:
             "ai_summary": self.ai_summary,
             "ai_doc_suggestions": self.ai_doc_suggestions,
             "ai_issue_breakdown": self.ai_issue_breakdown,
+            "ai_setup_guide": self.ai_setup_guide,
         }
 
 
@@ -503,6 +505,76 @@ def _build_ai_doc_suggestions(
     return suggestions
 
 
+def _extract_setup_guide(readme_text: str) -> list[str]:
+    """Parse *readme_text* and return a list of setup steps using regex heuristics.
+
+    Extracts:
+    - Installation commands (pip install / npm install).
+    - Environment variable setup lines (export / .env references).
+    - Test execution commands (pytest / npm test / npm run test).
+    """
+    steps: list[str] = []
+
+    lines = readme_text.splitlines()
+
+    _INSTALL = re.compile(
+        r"^\s*(pip\s+install|pip3\s+install|npm\s+install|yarn\s+install|poetry\s+install|"
+        r"pip\s+-r|pip3\s+-r)", re.IGNORECASE
+    )
+    _ENV_VAR = re.compile(
+        r"^\s*(export\s+\w+\s*=|cp\s+\.env|cp\s+env\.example|\.env|"
+        r"set\s+\w+=)", re.IGNORECASE
+    )
+    _TEST_CMD = re.compile(
+        r"^\s*(pytest|python\s+-m\s+pytest|npm\s+test|npm\s+run\s+test|"
+        r"yarn\s+test|make\s+test)", re.IGNORECASE
+    )
+
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip().lstrip("$ ").strip()
+        if not stripped or stripped in seen:
+            continue
+        if _INSTALL.match(stripped):
+            steps.append(f"Install: `{stripped}`")
+            seen.add(stripped)
+        elif _ENV_VAR.match(stripped):
+            steps.append(f"Env setup: `{stripped}`")
+            seen.add(stripped)
+        elif _TEST_CMD.match(stripped):
+            steps.append(f"Run tests: `{stripped}`")
+            seen.add(stripped)
+
+    return steps
+
+
+def _build_ai_setup_guide(readme_text: str, repo_name: str, api_key: str) -> list[str]:
+    """Use Gemini to generate a step-by-step setup guide from *readme_text*.
+
+    Falls back to :func:`_extract_setup_guide` when the AI call fails or
+    the key is absent.
+    """
+    if not api_key:
+        return _extract_setup_guide(readme_text)
+
+    prompt = (
+        f"You are a senior developer onboarding a new engineer onto the '{repo_name}' project.\n\n"
+        f"Below is the project's README:\n\n{readme_text[:4000]}\n\n"
+        "Extract a concise, numbered step-by-step setup guide that covers:\n"
+        "1. Installation commands (pip install, npm install, etc.)\n"
+        "2. Environment variable setup (.env, export statements)\n"
+        "3. Test execution commands (pytest, npm test, etc.)\n\n"
+        "Return only a plain list with one step per line, prefixed by its number (e.g. '1. ...').\n"
+        "If the README does not contain relevant information for a category, skip that category.\n"
+        "Do not add any explanation or headers."
+    )
+    text = _gemini_generate(prompt, api_key)
+    if text:
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        return lines if lines else _extract_setup_guide(readme_text)
+    return _extract_setup_guide(readme_text)
+
+
 def _build_ai_issue_breakdown(
     issue_title: str,
     issue_body: str,
@@ -631,6 +703,7 @@ def run_doc_drift(
     # Step 1: Parse README (Document Understanding)
     # ------------------------------------------------------------------
     readme_path = repo_path / "README.md"
+    readme_text = readme_path.read_text(encoding="utf-8", errors="replace") if readme_path.exists() else ""
     documented_paths, documented_params = _parse_readme(readme_path)
 
     # ------------------------------------------------------------------
@@ -682,6 +755,9 @@ def run_doc_drift(
     ai_doc_suggestions: list[str] = []
     ai_issue_breakdown: list[str] = []
 
+    # Step-by-step setup guide from README (Gemini-enhanced or regex fallback)
+    ai_setup_guide: list[str] = _build_ai_setup_guide(readme_text, repo_name, effective_key)
+
     if effective_key:
         ai_summary = _build_ai_summary(repo_name, kg, effective_key)
         ai_doc_suggestions = _build_ai_doc_suggestions(missing_ds, effective_key)
@@ -689,7 +765,7 @@ def run_doc_drift(
             ai_issue_breakdown = _build_ai_issue_breakdown(
                 issue_title, issue_body, effective_key
             )
-        gemini_used = bool(ai_summary or ai_doc_suggestions or ai_issue_breakdown)
+        gemini_used = bool(ai_summary or ai_doc_suggestions or ai_issue_breakdown or ai_setup_guide)
 
     return DriftReport(
         repo_name=repo_name,
@@ -706,4 +782,5 @@ def run_doc_drift(
         ai_summary=ai_summary,
         ai_doc_suggestions=ai_doc_suggestions,
         ai_issue_breakdown=ai_issue_breakdown,
+        ai_setup_guide=ai_setup_guide,
     )

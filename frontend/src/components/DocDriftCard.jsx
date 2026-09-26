@@ -67,12 +67,17 @@ export default function DocDriftCard({ driftScore, missingDocs }) {
   return (
     <div className="glass-card flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-2 mb-4">
+      <div className="flex items-center gap-2 mb-1">
         <div className="flex items-center justify-center w-7 h-7 rounded-md bg-amber-500/20 border border-amber-500/30">
           <FileText size={14} className="text-amber-400" />
         </div>
-        <h2 className="text-sm font-semibold text-white tracking-wide">Documentation Drift</h2>
+        <h2 className="text-sm font-semibold text-white tracking-wide">Documentation Drift Health</h2>
       </div>
+      {/* Purpose subtitle */}
+      <p className="text-[10px] text-slate-500 leading-relaxed mb-4">
+        Purpose: Quantifies documentation health by measuring whether code endpoints and functions
+        match the repository's README and docstrings.
+      </p>
 
       {driftScore == null ? (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-600 gap-3">
@@ -98,16 +103,21 @@ export default function DocDriftCard({ driftScore, missingDocs }) {
               </div>
             ) : (
               <ul className="space-y-1.5">
-                {alerts.map((item, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-xs text-amber-300
-                               bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2"
-                  >
-                    <AlertTriangle size={12} className="text-amber-400 mt-0.5 shrink-0" />
-                    <span className="font-mono break-all">{item}</span>
-                  </li>
-                ))}
+                {alerts.map((item, i) => {
+                  const label = typeof item === 'object'
+                    ? `${item.function} (${item.file}:${item.line})`
+                    : String(item)
+                  return (
+                    <li
+                      key={i}
+                      className="flex items-start gap-2 text-xs text-amber-300
+                                 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2"
+                    >
+                      <AlertTriangle size={12} className="text-amber-400 mt-0.5 shrink-0" />
+                      <span className="font-mono break-all">{label}</span>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
