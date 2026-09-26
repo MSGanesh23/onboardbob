@@ -176,7 +176,7 @@ export default function App() {
 
       {/* Error banner */}
       {error && (
-        <div className="max-w-7xl mx-auto w-full px-6 mt-4">
+        <div className="max-w-[1400px] mx-auto w-full px-6 mt-4">
           <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
             ⚠ {error}
           </div>
@@ -185,7 +185,7 @@ export default function App() {
 
 
       {/* Dashboard — 4-section vertical layout */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6 space-y-5">
+      <main className="flex-1 max-w-[1400px] mx-auto w-full px-6 py-6 space-y-5">
         {/* Section 1 (Top Center): Architecture Graph — centered full-width */}
         <div className="w-full min-h-[420px]">
           <ArchitectureGraph graph={graph} svgImage={svgImage} />

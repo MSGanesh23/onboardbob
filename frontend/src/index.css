@@ -13,7 +13,7 @@ body {
 /* ── Glassmorphism card ─────────────────────────────────────────── */
 .glass-card {
   position: relative;
-  padding: 1.25rem;
+  padding: 1.5rem;
   border-radius: 0.875rem;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);

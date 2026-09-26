@@ -43,6 +43,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import requests
+
 try:
     from dotenv import load_dotenv as _load_dotenv
     _load_dotenv()
@@ -413,41 +415,35 @@ def _build_markdown_suggestions(
 # ---------------------------------------------------------------------------
 
 def _gemini_generate(prompt: str, api_key: str) -> str:
-    """Send *prompt* to Gemini and return the response text.
+    """Send *prompt* to the Gemini REST API and return the response text.
 
-    Iterates through a list of model candidates and uses the first one that
-    responds without a 404 error.  Returns an empty string when the SDK is
-    absent, the key is invalid, or all candidates fail.
+    Uses a direct ``requests.post`` call to the public Gemini v1beta endpoint.
+    Returns an empty string when the key is absent, the request fails, or the
+    response cannot be parsed.
     """
-    try:
-        import google.generativeai as genai  # type: ignore
-    except ImportError:
-        print("[doc_sync] google-generativeai not installed – skipping Gemini call.", file=sys.stderr)
+    if not api_key:
         return ""
-
-    model_candidates = [
-        "gemini-1.5-flash-latest",
-        "gemini-2.0-flash",
-        "gemini-1.5-pro-latest",
-        "gemini-1.5-flash",
-    ]
-
-    genai.configure(api_key=api_key)
-    for model_name in model_candidates:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            return response.text.strip()
-        except Exception as exc:  # noqa: BLE001
-            exc_str = str(exc)
-            if "404" in exc_str or "not found" in exc_str.lower():
-                print(f"[doc_sync] Model {model_name} returned 404 – trying next candidate.", file=sys.stderr)
-                continue
-            print(f"[doc_sync] Gemini call failed with model {model_name}: {exc}", file=sys.stderr)
-            return ""
-
-    print("[doc_sync] All Gemini model candidates exhausted.", file=sys.stderr)
-    return ""
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.5-flash:generateContent?key={api_key}"
+    )
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    try:
+        res = requests.post(url, json=payload, timeout=12)
+        if res.status_code == 429:
+            raise requests.exceptions.HTTPError("429 Too Many Requests", response=res)
+        res.raise_for_status()
+        data = res.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            print("[doc_sync] Gemini rate limit (429) hit — falling back to offline AST.", file=sys.stderr)
+            raise
+        print(f"[doc_sync] Gemini REST call error: {exc}", file=sys.stderr)
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"[doc_sync] Gemini REST call error: {exc}", file=sys.stderr)
+        return ""
 
 
 def _build_ai_summary(
@@ -756,16 +752,29 @@ def run_doc_drift(
     ai_issue_breakdown: list[str] = []
 
     # Step-by-step setup guide from README (Gemini-enhanced or regex fallback)
-    ai_setup_guide: list[str] = _build_ai_setup_guide(readme_text, repo_name, effective_key)
+    try:
+        ai_setup_guide: list[str] = _build_ai_setup_guide(readme_text, repo_name, effective_key)
+    except requests.exceptions.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            ai_setup_guide = _extract_setup_guide(readme_text)
+        else:
+            raise
 
     if effective_key:
-        ai_summary = _build_ai_summary(repo_name, kg, effective_key)
-        ai_doc_suggestions = _build_ai_doc_suggestions(missing_ds, effective_key)
-        if issue_title or issue_body:
-            ai_issue_breakdown = _build_ai_issue_breakdown(
-                issue_title, issue_body, effective_key
-            )
-        gemini_used = bool(ai_summary or ai_doc_suggestions or ai_issue_breakdown or ai_setup_guide)
+        try:
+            ai_summary = _build_ai_summary(repo_name, kg, effective_key)
+            ai_doc_suggestions = _build_ai_doc_suggestions(missing_ds, effective_key)
+            if issue_title or issue_body:
+                ai_issue_breakdown = _build_ai_issue_breakdown(
+                    issue_title, issue_body, effective_key
+                )
+            gemini_used = bool(ai_summary or ai_doc_suggestions or ai_issue_breakdown or ai_setup_guide)
+        except requests.exceptions.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429:
+                ai_summary = "Gemini API rate limit hit — populated via fast offline AST fallback."
+                ai_setup_guide = _extract_setup_guide(readme_text)
+            else:
+                raise
 
     return DriftReport(
         repo_name=repo_name,
