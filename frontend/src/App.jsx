@@ -86,36 +86,38 @@ export default function App() {
     setError(null)
 
     try {
-      // Try real backend first; fall back to mock if it's unreachable
-      let scanData, issueData
+      // Step 1: Clone the repo
+      const cloneRes = await axios.post('http://localhost:8000/api/clone-repo', {
+        repo_url: repoUrl,
+        issue_url: issueUrl,
+      })
+      const repo_name = cloneRes.data.repo_name
 
-      try {
-        const [scanRes, issueRes] = await Promise.all([
-          axios.post('/api/scan-repo', { repo_url: repoUrl }, { timeout: 15000 }),
-          issueUrl
-            ? axios.post('/api/issue', { issue_url: issueUrl }, { timeout: 10000 })
-            : Promise.resolve(null),
-        ])
-        scanData = scanRes.data
-        issueData = issueRes?.data
-      } catch {
-        // Backend not available — use mock data for demo purposes
-        scanData = MOCK_DATA
-        issueData = issueUrl ? MOCK_DATA : null
-      }
+      // Step 2: Scan the repo for the architecture graph
+      const scanRes = await axios.post('http://localhost:8000/api/scan-repo', { repo_name })
+      const scanData = scanRes.data
 
-      setGraph(scanData.graph ?? MOCK_GRAPH)
-      setDriftScore(scanData.driftScore ?? scanData.drift_score ?? MOCK_DATA.driftScore)
-      setMissingDocs(scanData.missingDocs ?? scanData.missing_docs ?? MOCK_DATA.missingDocs)
-      setEntryPoints(scanData.entryPoints ?? scanData.entry_points ?? MOCK_DATA.entryPoints)
-      setTourSteps(scanData.tourSteps ?? scanData.tour_steps ?? MOCK_DATA.tourSteps)
+      // Step 3: Get doc drift score and missing docstrings
+      const driftRes = await axios.post('http://localhost:8000/api/doc-drift', { repo_name })
+      const driftData = driftRes.data
 
+      setGraph(scanData.graph ?? scanData.mermaid ?? null)
+      setDriftScore(driftData.drift_score ?? driftData.driftScore ?? null)
+      setMissingDocs(driftData.missing_docs ?? driftData.missingDocs ?? [])
+      // Prefer knowledge_graph sub-keys; fall back to top-level response fields
+      const kg = scanData.knowledge_graph ?? {}
+      setEntryPoints(kg.entry_points ?? scanData.entry_points ?? scanData.entryPoints ?? null)
+      setTourSteps(kg.tour_steps ?? scanData.tour_steps ?? scanData.tourSteps ?? null)
+
+      const issueData = cloneRes.data.issue ?? null
       if (issueData) {
-        setIssue(issueData.issue ?? MOCK_DATA.issue)
-        setImpactedFiles(issueData.impactedFiles ?? issueData.impacted_files ?? MOCK_DATA.impactedFiles)
+        setIssue(issueData)
+        setImpactedFiles(cloneRes.data.impacted_files ?? cloneRes.data.impactedFiles ?? [])
       }
     } catch (err) {
-      setError(err.message ?? 'Unknown error')
+      const message =
+        err.response?.data?.detail ?? err.response?.data?.message ?? err.message ?? 'Unknown error'
+      setError(`Backend error: ${message}`)
     } finally {
       setLoading(false)
     }

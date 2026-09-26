@@ -202,6 +202,103 @@ def _extract_from_file(filepath: str, rel_path: str, kg: dict) -> None:
 # Public: parse_repo
 # ---------------------------------------------------------------------------
 
+def _build_entry_points(root: Path) -> list[dict]:
+    """Identify key entry-point files in *root* and return a typed list."""
+    entry_points: list[dict] = []
+    seen: set[str] = set()
+
+    # Root-level entrypoints (main.py, app.py, run.py, wsgi.py, asgi.py)
+    for name in ("main.py", "app.py", "run.py", "wsgi.py", "asgi.py"):
+        candidate = root / name
+        if candidate.exists():
+            rel = str(candidate.relative_to(root))
+            if rel not in seen:
+                entry_points.append({"name": rel, "type": "entrypoint"})
+                seen.add(rel)
+
+    # Router files under any routers/ directory
+    for py_file in sorted(root.rglob("routers/*.py")):
+        if py_file.name == "__init__.py":
+            continue
+        rel = str(py_file.relative_to(root))
+        if rel not in seen:
+            entry_points.append({"name": rel, "type": "router"})
+            seen.add(rel)
+
+    # Schema/model files under any models/ directory
+    for py_file in sorted(root.rglob("models/*.py")):
+        if py_file.name == "__init__.py":
+            continue
+        rel = str(py_file.relative_to(root))
+        if rel not in seen:
+            entry_points.append({"name": rel, "type": "model"})
+            seen.add(rel)
+
+    return entry_points
+
+
+def _build_tour_steps(entry_points: list[dict]) -> list[str]:
+    """Generate 5 structured reading-tour steps from *entry_points*."""
+    steps: list[str] = []
+
+    entrypoints = [ep for ep in entry_points if ep["type"] == "entrypoint"]
+    routers     = [ep for ep in entry_points if ep["type"] == "router"]
+    models      = [ep for ep in entry_points if ep["type"] == "model"]
+
+    # Step 1 – application bootstrap
+    if entrypoints:
+        names = ", ".join(ep["name"] for ep in entrypoints[:2])
+        steps.append(
+            f"1. Start with {names} to understand the application bootstrap "
+            "and how the framework (FastAPI/Flask) is initialised."
+        )
+    else:
+        steps.append(
+            "1. Locate the main entry point (main.py / app.py) to understand "
+            "how the application is bootstrapped."
+        )
+
+    # Step 2 – routers / API surface
+    if routers:
+        names = ", ".join(ep["name"] for ep in routers[:3])
+        steps.append(
+            f"2. Explore the routers ({names}) to discover the API endpoints "
+            "and understand the request/response flow."
+        )
+    else:
+        steps.append(
+            "2. Explore the routers directory to discover the API endpoints "
+            "and understand the request/response flow."
+        )
+
+    # Step 3 – data models / schemas
+    if models:
+        names = ", ".join(ep["name"] for ep in models[:3])
+        steps.append(
+            f"3. Read the data models ({names}) to learn the Pydantic schemas "
+            "and the shapes of data passed between layers."
+        )
+    else:
+        steps.append(
+            "3. Read the models directory to learn the data schemas and "
+            "structures passed between layers."
+        )
+
+    # Step 4 – services / business logic
+    steps.append(
+        "4. Dive into the services (or core) layer to understand the business "
+        "logic, external API calls, and any background tasks."
+    )
+
+    # Step 5 – tests
+    steps.append(
+        "5. Review the tests directory to understand expected behaviour, "
+        "edge cases, and how to run the test suite locally."
+    )
+
+    return steps
+
+
 def parse_repo(repo_path: str) -> dict:
     """Walk *repo_path* recursively and return a structured knowledge graph.
 
@@ -213,14 +310,16 @@ def parse_repo(repo_path: str) -> dict:
     Returns
     -------
     dict with keys: ``endpoints``, ``pydantic_models``, ``functions``,
-    ``classes``, ``imports``.
+    ``classes``, ``imports``, ``entry_points``, ``tour_steps``.
     """
-    kg: dict[str, list] = {
+    kg: dict[str, Any] = {
         "endpoints": [],
         "pydantic_models": [],
         "functions": [],
         "classes": [],
         "imports": [],
+        "entry_points": [],
+        "tour_steps": [],
     }
 
     root = Path(repo_path).resolve()
@@ -240,6 +339,10 @@ def parse_repo(repo_path: str) -> dict:
             rel = os.path.relpath(full, root)
             _extract_from_file(full, rel, kg)
 
+    # Automatically populate entry_points and tour_steps
+    kg["entry_points"] = _build_entry_points(root)
+    kg["tour_steps"] = _build_tour_steps(kg["entry_points"])
+
     return kg
 
 
@@ -248,57 +351,90 @@ def parse_repo(repo_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def generate_mermaid_graph(ast_json: dict) -> str:
-    """Convert a knowledge-graph dict into a Mermaid.js ``graph TD`` flowchart.
+    """Convert a knowledge-graph dict into a Mermaid.js ``flowchart TD``.
 
-    Nodes
-    -----
-    - Each HTTP endpoint:  ``ENDPOINT_<n>[METHOD /path]``
-    - Each Pydantic model: ``MODEL_<name>[<name>]``
-    - Each class:          ``CLASS_<name>[<name>]``
+    The graph is organized into three named subgraphs for readability:
 
-    Edges
-    -----
-    - Endpoint → Function node (if the function name matches a known function)
-    - Pydantic model inheritance: child → parent (when parent is a known model/class)
-    - Class inheritance: child → parent (when parent is a known class)
+    Subgraphs
+    ---------
+    - **Endpoints** – HTTP endpoint nodes wired to their handler functions
+    - **Functions** – standalone function nodes referenced by endpoints
+    - **Models**    – Pydantic model nodes with inheritance edges
+
+    Orientation: ``flowchart TD`` (top-down, compact vertical layout).
     """
-    lines: list[str] = ["graph TD"]
-
-    known_classes = {c["name"] for c in ast_json.get("classes", [])}
-    known_models = {m["name"] for m in ast_json.get("pydantic_models", [])}
+    known_classes  = {c["name"] for c in ast_json.get("classes", [])}
+    known_models   = {m["name"] for m in ast_json.get("pydantic_models", [])}
     known_functions = {f["name"] for f in ast_json.get("functions", [])}
 
+    # Collect lines per subgraph so empty subgraphs are omitted cleanly
+    endpoint_lines: list[str] = []
+    function_lines: list[str] = []
+    model_lines:    list[str] = []
+    edge_lines:     list[str] = []   # cross-subgraph edges go after all subgraphs
+
     # --- Endpoint nodes & edges -------------------------------------------
+    fn_ids_used: set[str] = set()
     for idx, ep in enumerate(ast_json.get("endpoints", [])):
         ep_id = f"ENDPOINT_{idx}"
         label = f"{ep['method']} {ep['path']}"
-        lines.append(f"    {ep_id}[\"{label}\"]")
+        endpoint_lines.append(f"        {ep_id}[\"{label}\"]")
 
         fn_name = ep.get("function", "")
         if fn_name and fn_name in known_functions:
             fn_id = "FN_" + _safe_id(fn_name)
-            lines.append(f"    {fn_id}[\"{fn_name}()\"]")
-            lines.append(f"    {ep_id} --> {fn_id}")
+            fn_ids_used.add(fn_id)
+            function_lines.append(f"        {fn_id}[\"{fn_name}()\"]")
+            edge_lines.append(f"    {ep_id} --> {fn_id}")
+
+    # Remove duplicate function nodes (same function on multiple endpoints)
+    seen_fn: set[str] = set()
+    deduped_fn: list[str] = []
+    for line in function_lines:
+        node_id = line.strip().split("[")[0]
+        if node_id not in seen_fn:
+            seen_fn.add(node_id)
+            deduped_fn.append(line)
+    function_lines = deduped_fn
 
     # --- Pydantic model nodes & inheritance edges -------------------------
     for model in ast_json.get("pydantic_models", []):
         m_id = "MODEL_" + _safe_id(model["name"])
-        lines.append(f"    {m_id}[\"{model['name']}\"]")
+        model_lines.append(f"        {m_id}[\"{model['name']}\"]")
         for base in model.get("bases", []):
             if base and (base in known_models or base in known_classes):
                 base_id = "MODEL_" + _safe_id(base)
-                lines.append(f"    {m_id} --> {base_id}")
+                edge_lines.append(f"    {m_id} --> {base_id}")
 
-    # --- Class nodes & inheritance edges ----------------------------------
+    # --- Class nodes (non-Pydantic) inside Models subgraph ----------------
     for cls in ast_json.get("classes", []):
-        # Skip if already rendered as a Pydantic model
         if cls["name"] in known_models:
             continue
         c_id = "CLASS_" + _safe_id(cls["name"])
-        lines.append(f"    {c_id}[\"{cls['name']}\"]")
+        model_lines.append(f"        {c_id}[\"{cls['name']}\"]")
         for base in cls.get("bases", []):
             if base and base in known_classes:
                 base_id = "CLASS_" + _safe_id(base)
-                lines.append(f"    {c_id} --> {base_id}")
+                edge_lines.append(f"    {c_id} --> {base_id}")
 
-    return "\n".join(lines) + "\n"
+    # --- Assemble output --------------------------------------------------
+    out: list[str] = ["flowchart TD"]
+
+    if endpoint_lines:
+        out.append("    subgraph Endpoints")
+        out.extend(endpoint_lines)
+        out.append("    end")
+
+    if function_lines:
+        out.append("    subgraph Functions")
+        out.extend(function_lines)
+        out.append("    end")
+
+    if model_lines:
+        out.append("    subgraph Models")
+        out.extend(model_lines)
+        out.append("    end")
+
+    out.extend(edge_lines)
+
+    return "\n".join(out) + "\n"

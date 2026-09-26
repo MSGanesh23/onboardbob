@@ -101,10 +101,10 @@ export default function DocDriftCard({ driftScore, missingDocs }) {
                 {alerts.map((item, i) => (
                   <li
                     key={i}
-                    className="flex items-start gap-2 text-xs text-slate-400
-                               bg-red-500/5 border border-red-500/15 rounded-md px-3 py-2"
+                    className="flex items-start gap-2 text-xs text-amber-300
+                               bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2"
                   >
-                    <AlertTriangle size={12} className="text-red-400 mt-0.5 shrink-0" />
+                    <AlertTriangle size={12} className="text-amber-400 mt-0.5 shrink-0" />
                     <span className="font-mono break-all">{item}</span>
                   </li>
                 ))}
