@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import axios from 'axios'
 import Header from './components/Header'
 import ArchitectureGraph from './components/ArchitectureGraph'
@@ -70,16 +70,20 @@ const MOCK_DATA = {
 // App
 // ---------------------------------------------------------------------------
 export default function App() {
+  const _lastRepoName = useRef(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
   const [graph, setGraph] = useState(null)
+  const [svgImage, setSvgImage] = useState(null)
+  const [aiSummary, setAiSummary] = useState(null)
   const [driftScore, setDriftScore] = useState(null)
   const [missingDocs, setMissingDocs] = useState(null)
   const [entryPoints, setEntryPoints] = useState(null)
   const [tourSteps, setTourSteps] = useState(null)
   const [issue, setIssue] = useState(null)
   const [impactedFiles, setImpactedFiles] = useState(null)
+  const [fixResult, setFixResult] = useState(null)
 
   const handleScan = async ({ repoUrl, issueUrl }) => {
     setLoading(true)
@@ -91,29 +95,42 @@ export default function App() {
         repo_url: repoUrl,
         issue_url: issueUrl,
       })
-      const repo_name = cloneRes.data.repo_name
+      const repo_name   = cloneRes.data.repo_name
+      _lastRepoName.current = repo_name
+      const issueData   = cloneRes.data.issue ?? null
+      const issueTitleV = issueData?.title ?? ''
+      const issueBodyV  = issueData?.body  ?? ''
 
       // Step 2: Scan the repo for the architecture graph
       const scanRes = await axios.post('http://localhost:8000/api/scan-repo', { repo_name })
       const scanData = scanRes.data
 
-      // Step 3: Get doc drift score and missing docstrings
-      const driftRes = await axios.post('http://localhost:8000/api/doc-drift', { repo_name })
+      // Step 3: Get doc drift score, missing docstrings, and Gemini AI features
+      const driftRes = await axios.post('http://localhost:8000/api/doc-drift', {
+        repo_name,
+        issue_title: issueTitleV,
+        issue_body: issueBodyV,
+      })
       const driftData = driftRes.data
 
       setGraph(scanData.graph ?? scanData.mermaid ?? null)
+      setSvgImage(scanData.svg_image ?? null)
+      // Prefer top-level ai_summary from scan, fall back to drift report
+      setAiSummary(
+        scanData.ai_summary || driftData.ai_summary || null
+      )
       setDriftScore(driftData.drift_score ?? driftData.driftScore ?? null)
       setMissingDocs(driftData.missing_docs ?? driftData.missingDocs ?? [])
-      // Prefer knowledge_graph sub-keys; fall back to top-level response fields
-      const kg = scanData.knowledge_graph ?? {}
-      setEntryPoints(kg.entry_points ?? scanData.entry_points ?? scanData.entryPoints ?? null)
-      setTourSteps(kg.tour_steps ?? scanData.tour_steps ?? scanData.tourSteps ?? null)
+      // Prefer top-level response fields, then knowledge_graph sub-keys
+      setEntryPoints(scanData.entry_points ?? (scanData.knowledge_graph ?? {}).entry_points ?? null)
+      setTourSteps(scanData.tour_steps ?? (scanData.knowledge_graph ?? {}).tour_steps ?? null)
 
-      const issueData = cloneRes.data.issue ?? null
       if (issueData) {
         setIssue(issueData)
         setImpactedFiles(cloneRes.data.impacted_files ?? cloneRes.data.impactedFiles ?? [])
       }
+      // Clear any previous fix result on new scan
+      setFixResult(null)
     } catch (err) {
       const message =
         err.response?.data?.detail ?? err.response?.data?.message ?? err.message ?? 'Unknown error'
@@ -124,8 +141,18 @@ export default function App() {
   }
 
   const handleExecuteFix = async () => {
-    // In a real setup this would POST to /api/execute-fix
-    await new Promise(r => setTimeout(r, 1800))
+    if (!issue) return
+    // repo_name is the last path segment of the issue URL's repo, or derive from state
+    // We stored it in a ref-free way: re-derive from the last clone response.
+    // Since we don't store repo_name in state, pass it via closure using a ref.
+    const repoName = _lastRepoName.current
+    if (!repoName) return
+    const res = await axios.post('http://localhost:8000/api/execute-fix', {
+      repo_name: repoName,
+      issue_title: issue?.title ?? '',
+      issue_body: issue?.body ?? '',
+    })
+    setFixResult(res.data)
   }
 
   return (
@@ -154,12 +181,24 @@ export default function App() {
         </div>
       )}
 
+      {/* Gemini AI summary banner */}
+      {aiSummary && (
+        <div className="max-w-7xl mx-auto w-full px-6 mt-4">
+          <div className="flex items-start gap-3 text-xs bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3">
+            <span className="shrink-0 flex items-center gap-1 font-semibold text-violet-300 border border-violet-500/30 rounded px-2 py-0.5 bg-violet-600/10">
+              ✦ Powered by Gemini AI
+            </span>
+            <p className="text-slate-300 leading-relaxed">{aiSummary}</p>
+          </div>
+        </div>
+      )}
+
       {/* Dashboard grid */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 h-full">
           {/* Architecture Graph — spans 2 columns */}
           <div className="lg:col-span-2 min-h-[420px]">
-            <ArchitectureGraph graph={graph} />
+            <ArchitectureGraph graph={graph} svgImage={svgImage} />
           </div>
 
           {/* Doc Drift */}
@@ -178,6 +217,7 @@ export default function App() {
               issue={issue}
               impactedFiles={impactedFiles}
               onExecuteFix={handleExecuteFix}
+              fixResult={fixResult}
             />
           </div>
         </div>

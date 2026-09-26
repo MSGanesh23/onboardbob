@@ -24,12 +24,12 @@ This module implements the core "Document Understanding" pipeline:
    documentation is (100 = perfectly documented, 0 = fully undocumented).
 
 5. **Markdown Suggestions** – Generates ready-to-paste Markdown snippets to
-   fill documentation gaps, with optional IBM Granite / watsonx.ai enrichment
-   when ``WATSONX_API_KEY`` + ``WATSONX_PROJECT_ID`` env-vars are set.
+   fill documentation gaps, with optional Gemini AI enrichment when
+   ``GEMINI_API_KEY`` env-var is set (or passed via request header).
 
 Public API
 ----------
-run_doc_drift(repo_name: str) -> DriftReport
+run_doc_drift(repo_name: str, gemini_api_key: str | None) -> DriftReport
     Entry-point called by the REST layer.
 """
 
@@ -42,6 +42,12 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except ImportError:
+    pass
 
 from .ast_parser import parse_repo
 
@@ -88,6 +94,10 @@ class DriftReport:
     total_functions: int
     markdown_suggestions: list[str]          # ready-to-paste Markdown blocks
     watsonx_used: bool = False
+    gemini_used: bool = False
+    ai_summary: str = ""
+    ai_doc_suggestions: list[str] = field(default_factory=list)
+    ai_issue_breakdown: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -101,6 +111,10 @@ class DriftReport:
             "total_functions": self.total_functions,
             "markdown_suggestions": self.markdown_suggestions,
             "watsonx_used": self.watsonx_used,
+            "gemini_used": self.gemini_used,
+            "ai_summary": self.ai_summary,
+            "ai_doc_suggestions": self.ai_doc_suggestions,
+            "ai_issue_breakdown": self.ai_issue_breakdown,
         }
 
 
@@ -393,6 +407,125 @@ def _build_markdown_suggestions(
 
 
 # ---------------------------------------------------------------------------
+# Optional: Google Gemini AI enrichment
+# ---------------------------------------------------------------------------
+
+def _gemini_generate(prompt: str, api_key: str) -> str:
+    """Send *prompt* to Gemini and return the response text.
+
+    Iterates through a list of model candidates and uses the first one that
+    responds without a 404 error.  Returns an empty string when the SDK is
+    absent, the key is invalid, or all candidates fail.
+    """
+    try:
+        import google.generativeai as genai  # type: ignore
+    except ImportError:
+        print("[doc_sync] google-generativeai not installed – skipping Gemini call.", file=sys.stderr)
+        return ""
+
+    model_candidates = [
+        "gemini-1.5-flash-latest",
+        "gemini-2.0-flash",
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash",
+    ]
+
+    genai.configure(api_key=api_key)
+    for model_name in model_candidates:
+        try:
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content(prompt)
+            return response.text.strip()
+        except Exception as exc:  # noqa: BLE001
+            exc_str = str(exc)
+            if "404" in exc_str or "not found" in exc_str.lower():
+                print(f"[doc_sync] Model {model_name} returned 404 – trying next candidate.", file=sys.stderr)
+                continue
+            print(f"[doc_sync] Gemini call failed with model {model_name}: {exc}", file=sys.stderr)
+            return ""
+
+    print("[doc_sync] All Gemini model candidates exhausted.", file=sys.stderr)
+    return ""
+
+
+def _build_ai_summary(
+    repo_name: str,
+    kg: dict,
+    api_key: str,
+) -> str:
+    """Use Gemini to generate a 2-sentence executive summary for new developers."""
+    n_endpoints = len(kg.get("endpoints", []))
+    n_models    = len(kg.get("pydantic_models", []))
+    n_functions = len(kg.get("functions", []))
+    n_classes   = len(kg.get("classes", []))
+    ep_sample   = ", ".join(
+        f"{ep['method']} {ep['path']}"
+        for ep in kg.get("endpoints", [])[:5]
+    ) or "none detected"
+
+    prompt = (
+        f"You are a senior software engineer onboarding a new developer onto the "
+        f"'{repo_name}' codebase.\n\n"
+        f"Repository facts:\n"
+        f"- HTTP endpoints ({n_endpoints}): {ep_sample}\n"
+        f"- Pydantic models: {n_models}\n"
+        f"- Functions: {n_functions}\n"
+        f"- Classes: {n_classes}\n\n"
+        "Write exactly 2 concise sentences that give a new developer an executive "
+        "overview of what this codebase does and how it is structured. "
+        "Do not use bullet points or headers."
+    )
+    return _gemini_generate(prompt, api_key)
+
+
+def _build_ai_doc_suggestions(
+    missing_ds: list[dict],
+    api_key: str,
+    max_items: int = 5,
+) -> list[str]:
+    """Use Gemini to write ready-to-paste Python docstrings for undocumented functions."""
+    suggestions: list[str] = []
+    for fn in missing_ds[:max_items]:
+        params_str = ", ".join(p for p in fn["params"] if p != "self") or "none"
+        prompt = (
+            f"Write a concise Google-style Python docstring for a function named "
+            f"'{fn['function']}' in file '{fn['file']}' (line {fn['line']}).\n"
+            f"Parameters: {params_str}.\n"
+            "Return only the docstring text (the triple-quoted string content, "
+            "without the surrounding triple quotes or def line)."
+        )
+        text = _gemini_generate(prompt, api_key)
+        if text:
+            suggestions.append(
+                f"# {fn['function']} ({fn['file']}:{fn['line']})\n"
+                f'"""\n{text}\n"""\n'
+            )
+    return suggestions
+
+
+def _build_ai_issue_breakdown(
+    issue_title: str,
+    issue_body: str,
+    api_key: str,
+) -> list[str]:
+    """Use Gemini to summarise a GitHub issue spec into actionable onboarding steps."""
+    if not issue_title and not issue_body:
+        return []
+    prompt = (
+        "You are a technical lead helping a new developer understand a GitHub issue.\n\n"
+        f"Issue title: {issue_title}\n\n"
+        f"Issue body:\n{issue_body}\n\n"
+        "Summarise this issue into 3–5 clear, numbered, actionable steps that a new "
+        "developer should follow to implement or investigate the fix. "
+        "Return each step as a plain sentence on its own line, prefixed with the step number."
+    )
+    text = _gemini_generate(prompt, api_key)
+    if not text:
+        return []
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+# ---------------------------------------------------------------------------
 # Optional: IBM watsonx.ai / Granite enrichment
 # ---------------------------------------------------------------------------
 
@@ -459,13 +592,25 @@ def _enrich_with_watsonx(suggestions: list[str], context: str) -> list[str]:
 # Public entry-point
 # ---------------------------------------------------------------------------
 
-def run_doc_drift(repo_name: str) -> DriftReport:
+def run_doc_drift(
+    repo_name: str,
+    gemini_api_key: str | None = None,
+    issue_title: str = "",
+    issue_body: str = "",
+) -> DriftReport:
     """Run the full Documentation Sync & Drift Detection pipeline.
 
     Parameters
     ----------
     repo_name:
         Name of the repository folder inside ``workspace/``.
+    gemini_api_key:
+        Optional Google Gemini API key.  Falls back to the ``GEMINI_API_KEY``
+        environment variable when *None*.
+    issue_title:
+        Title of the GitHub issue to break down (optional).
+    issue_body:
+        Body text of the GitHub issue to break down (optional).
 
     Returns
     -------
@@ -528,6 +673,24 @@ def run_doc_drift(repo_name: str) -> DriftReport:
     if enriched is not raw_suggestions:
         watsonx_used = True
 
+    # ------------------------------------------------------------------
+    # Step 6: Gemini AI enrichment (optional)
+    # ------------------------------------------------------------------
+    effective_key = gemini_api_key or os.environ.get("GEMINI_API_KEY", "")
+    gemini_used        = False
+    ai_summary         = ""
+    ai_doc_suggestions: list[str] = []
+    ai_issue_breakdown: list[str] = []
+
+    if effective_key:
+        ai_summary = _build_ai_summary(repo_name, kg, effective_key)
+        ai_doc_suggestions = _build_ai_doc_suggestions(missing_ds, effective_key)
+        if issue_title or issue_body:
+            ai_issue_breakdown = _build_ai_issue_breakdown(
+                issue_title, issue_body, effective_key
+            )
+        gemini_used = bool(ai_summary or ai_doc_suggestions or ai_issue_breakdown)
+
     return DriftReport(
         repo_name=repo_name,
         drift_score=drift_score,
@@ -539,4 +702,8 @@ def run_doc_drift(repo_name: str) -> DriftReport:
         total_functions=len(code_functions),
         markdown_suggestions=enriched,
         watsonx_used=watsonx_used,
+        gemini_used=gemini_used,
+        ai_summary=ai_summary,
+        ai_doc_suggestions=ai_doc_suggestions,
+        ai_issue_breakdown=ai_issue_breakdown,
     )

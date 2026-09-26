@@ -1,16 +1,20 @@
-import { BotMessageSquare, FileCode, ExternalLink, Play, Loader2 } from 'lucide-react'
+import { BotMessageSquare, FileCode, ExternalLink, Play, Loader2, GitBranch, CheckCircle2 } from 'lucide-react'
 import { useState } from 'react'
 
-export default function IssueNavigator({ issue, impactedFiles, onExecuteFix }) {
+export default function IssueNavigator({ issue, impactedFiles, onExecuteFix, fixResult }) {
   const [executing, setExecuting] = useState(false)
   const [done, setDone] = useState(false)
+  const [execError, setExecError] = useState(null)
 
   const handleExecute = async () => {
     if (!onExecuteFix) return
     setExecuting(true)
+    setExecError(null)
     try {
       await onExecuteFix()
       setDone(true)
+    } catch (err) {
+      setExecError(err.response?.data?.detail ?? err.message ?? 'Execution failed')
     } finally {
       setExecuting(false)
     }
@@ -77,14 +81,37 @@ export default function IssueNavigator({ issue, impactedFiles, onExecuteFix }) {
           )}
 
           {/* CTA */}
-          <div className="mt-auto pt-2">
-            {done ? (
-              <div className="flex items-center gap-2 text-emerald-400 text-xs font-medium
-                              bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-2.5">
-                <span className="w-2 h-2 bg-emerald-400 rounded-full" />
-                Fix dispatched to Bob Agent Mode
+          <div className="mt-auto pt-2 flex flex-col gap-2">
+            {/* Success banner – shown when fix result arrives */}
+            {(done && fixResult) && (
+              <div className="flex flex-col gap-1.5 text-xs bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-3">
+                <div className="flex items-center gap-2 text-emerald-400 font-semibold">
+                  <CheckCircle2 size={14} className="shrink-0" />
+                  Fix executed successfully
+                </div>
+                <div className="flex items-center gap-1.5 text-slate-300 font-mono">
+                  <GitBranch size={12} className="text-cyan-400 shrink-0" />
+                  <span className="text-cyan-300">{fixResult.branch}</span>
+                </div>
+                {fixResult.pytest_output && (
+                  <div className="mt-1">
+                    <span className="text-emerald-400 font-semibold">✓ PyTest:</span>
+                    <pre className="mt-1 text-[10px] text-slate-400 bg-slate-900/60 rounded p-2 max-h-28 overflow-y-auto whitespace-pre-wrap break-all">
+                      {fixResult.pytest_output}
+                    </pre>
+                  </div>
+                )}
               </div>
-            ) : (
+            )}
+
+            {/* Error banner */}
+            {execError && (
+              <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                ⚠ {execError}
+              </div>
+            )}
+
+            {!done && (
               <button
                 onClick={handleExecute}
                 disabled={executing}
