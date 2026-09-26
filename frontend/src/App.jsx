@@ -176,8 +176,8 @@ export default function App() {
 
       {/* Error banner */}
       {error && (
-        <div className="max-w-[1400px] mx-auto w-full px-6 mt-4">
-          <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5">
+        <div className="max-w-[1400px] mx-auto w-full px-7 mt-5">
+          <div className="text-base text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-5 py-3">
             ⚠ {error}
           </div>
         </div>
@@ -185,14 +185,14 @@ export default function App() {
 
 
       {/* Dashboard — 4-section vertical layout */}
-      <main className="flex-1 max-w-[1400px] mx-auto w-full px-6 py-6 space-y-5">
+      <main className="flex-1 max-w-[1400px] mx-auto w-full px-7 py-7 space-y-6">
         {/* Section 1 (Top Center): Architecture Graph — centered full-width */}
-        <div className="w-full min-h-[420px]">
+        <div className="w-full min-h-[440px]">
           <ArchitectureGraph graph={graph} svgImage={svgImage} />
         </div>
 
         {/* Section 2 (Middle): AI Onboarding Plan & Project Setup Guide */}
-        <div className="w-full min-h-[320px]">
+        <div className="w-full min-h-[340px]">
           <OnboardingChecklist
             entryPoints={entryPoints}
             tourSteps={tourSteps}
@@ -202,12 +202,12 @@ export default function App() {
         </div>
 
         {/* Section 3 (Lower Middle): Documentation Drift Health */}
-        <div className="w-full min-h-[360px]">
+        <div className="w-full min-h-[380px]">
           <DocDriftCard driftScore={driftScore} missingDocs={missingDocs} />
         </div>
 
         {/* Section 4 (Bottom): GitHub Issue Spec, Impacted Files, Execute Fix */}
-        <div className="w-full min-h-[280px]">
+        <div className="w-full min-h-[300px]">
           <IssueNavigator
             issue={issue}
             impactedFiles={impactedFiles}
@@ -218,7 +218,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="text-center text-[11px] text-slate-700 py-4 border-t border-white/5">
+      <footer className="text-center text-sm text-slate-700 py-5 border-t border-white/5">
         OnboardBob Dashboard • Built with React + Vite + Tailwind CSS
       </footer>
     </div>

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+html {
+  font-size: 18px;
+}
+
 :root {
   color-scheme: dark;
 }
@@ -13,7 +17,7 @@ body {
 /* ── Glassmorphism card ─────────────────────────────────────────── */
 .glass-card {
   position: relative;
-  padding: 1.5rem;
+  padding: 1.75rem;
   border-radius: 0.875rem;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
