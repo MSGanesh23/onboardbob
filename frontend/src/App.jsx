@@ -69,6 +69,8 @@ const MOCK_DATA = {
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+
 export default function App() {
   const _lastRepoName = useRef(null)
   const [loading, setLoading] = useState(false)
@@ -92,7 +94,7 @@ export default function App() {
 
     try {
       // Step 1: Clone the repo
-      const cloneRes = await axios.post('http://localhost:8000/api/clone-repo', {
+      const cloneRes = await axios.post(`${API_BASE}/api/clone-repo`, {
         repo_url: repoUrl,
         issue_url: issueUrl,
       })
@@ -103,11 +105,11 @@ export default function App() {
       const issueBodyV  = issueData?.body  ?? ''
 
       // Step 2: Scan the repo for the architecture graph
-      const scanRes = await axios.post('http://localhost:8000/api/scan-repo', { repo_name })
+      const scanRes = await axios.post(`${API_BASE}/api/scan-repo`, { repo_name })
       const scanData = scanRes.data
 
       // Step 3: Get doc drift score, missing docstrings, and Gemini AI features
-      const driftRes = await axios.post('http://localhost:8000/api/doc-drift', {
+      const driftRes = await axios.post(`${API_BASE}/api/doc-drift`, {
         repo_name,
         issue_title: issueTitleV,
         issue_body: issueBodyV,
@@ -149,7 +151,7 @@ export default function App() {
     // Since we don't store repo_name in state, pass it via closure using a ref.
     const repoName = _lastRepoName.current
     if (!repoName) return
-    const res = await axios.post('http://localhost:8000/api/execute-fix', {
+    const res = await axios.post(`${API_BASE}/api/execute-fix`, {
       repo_name: repoName,
       issue_title: issue?.title ?? '',
       issue_body: issue?.body ?? '',
