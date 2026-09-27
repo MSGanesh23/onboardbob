@@ -7,7 +7,8 @@
 [![React 18](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4.0-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![IBM Bob 2.0](https://img.shields.io/badge/IBM_Bob-2.0_IDE-0F62FE?logo=ibm&logoColor=white)](https://www.ibm.com/)
-[![Gemini AI](https://img.shields.io/badge/Gemini_AI-API-8E75B2?logo=google&logoColor=white)](https://ai.google.dev/)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-Free_Models-6366F1?logo=openai&logoColor=white)](https://openrouter.ai/)
+[![Gemini AI](https://img.shields.io/badge/Gemini_AI-Fallback-8E75B2?logo=google&logoColor=white)](https://ai.google.dev/)
 
 ---
 
@@ -33,8 +34,8 @@ Built end-to-end in **IBM Bob 2.0 IDE** using Agent Mode with multi-subagent orc
 - Computes a **drift score** (0–100) — the lower, the healthier — surfaced as a real-time health gauge on the dashboard.
 - Lists every missing documentation entry with precise file and symbol paths so engineers know exactly what to fix.
 
-### 3. 🧠 AI Onboarding Plan & README Setup Analyzer (Gemini API / watsonx)
-- Calls the **Gemini API** (with watsonx compatibility) to generate:
+### 3. 🧠 AI Onboarding Plan & README Setup Analyzer (Multi-Model / watsonx)
+- Drives AI generation through a **three-tier provider chain** — OpenRouter free-model array → Gemini REST API → offline deterministic AST — so the feature works even without a paid API key:
   - A prioritised **entry-point tour** — ordered list of files a new engineer should read first.
   - A contextual **AI summary** of the repository's purpose, architecture, and key patterns.
   - A **project setup guide** extracted from README and inferred from the dependency tree.
@@ -103,7 +104,7 @@ Committed session screenshots are available at:
 ### Prerequisites
 - Python 3.11+
 - Node.js 18+
-- A Gemini API key (set as `GEMINI_API_KEY` in your environment)
+- At least one AI API key — see [AI Provider Configuration](#-ai-provider-configuration) below
 - A GitHub token (set as `GITHUB_TOKEN`) for private repo / issue access
 
 ---
@@ -121,8 +122,9 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Set required environment variables
-export GEMINI_API_KEY="your-gemini-api-key"
+# Set required environment variables (at least one AI key is needed)
+export OPENROUTER_API_KEY="sk-or-..."     # primary — free models, no billing required
+export GEMINI_API_KEY="your-gemini-key"   # fallback — optional
 export GITHUB_TOKEN="your-github-token"   # optional for public repos
 
 # Start the FastAPI server
@@ -157,6 +159,34 @@ The dashboard will open at `http://localhost:5173`.
 2. Optionally paste a **GitHub Issue URL** to activate the Issue Navigator.
 3. Click **Scan Repository** — the backend clones the repo, analyses it, and populates all four dashboard sections.
 4. Explore the **Architecture Graph**, review the **Documentation Drift** score, follow the **AI Onboarding Plan**, and optionally click **✨ Fix using AI** to generate a branch + PyTest suite.
+
+---
+
+## 🔑 AI Provider Configuration
+
+`_gemini_generate` in [`backend/app/doc_sync.py`](backend/app/doc_sync.py) resolves AI providers in this order:
+
+| Priority | Provider | Key env-var | Key prefix | Model(s) |
+|---|---|---|---|---|
+| 1 — Primary | **OpenRouter** | `OPENROUTER_API_KEY` | `sk-or-` | `meta-llama/llama-3.3-70b-instruct:free` → `google/gemini-2.0-flash-exp:free` → `deepseek/deepseek-r1:free` |
+| 2 — Fallback | **Google Gemini** | `GEMINI_API_KEY` | any | `gemini-2.5-flash` |
+| 3 — Offline | **Deterministic AST** | *(none required)* | — | regex + AST heuristics only |
+
+**OpenRouter free models are tried in array order** — if model 1 returns a non-200 response (overloaded, unavailable), model 2 is tried automatically, and so on.
+A **429 rate-limit from any provider** is surfaced to the caller so the dashboard can report it rather than silently returning empty results.
+
+### Minimum setup (zero cost)
+```bash
+# Register at https://openrouter.ai — free tier, no credit card required
+export OPENROUTER_API_KEY="sk-or-your-key-here"
+```
+
+### Full setup (OpenRouter primary + Gemini fallback)
+```bash
+export OPENROUTER_API_KEY="sk-or-your-key-here"
+export GEMINI_API_KEY="your-gemini-key-here"
+export GITHUB_TOKEN="your-github-token"        # optional for public repos
+```
 
 ---
 

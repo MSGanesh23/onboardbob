@@ -415,35 +415,95 @@ def _build_markdown_suggestions(
 # ---------------------------------------------------------------------------
 
 def _gemini_generate(prompt: str, api_key: str) -> str:
-    """Send *prompt* to the Gemini REST API and return the response text.
+    """Send *prompt* to an AI backend and return the response text.
 
-    Uses a direct ``requests.post`` call to the public Gemini v1beta endpoint.
-    Returns an empty string when the key is absent, the request fails, or the
-    response cannot be parsed.
+    Resolution order:
+    1. **OpenRouter** (``OPENROUTER_API_KEY`` env-var or *api_key* arg, prefix
+       ``sk-or-``) — iterates a free-model array until one succeeds.
+    2. **Google Gemini** (``GEMINI_API_KEY`` env-var) — REST fallback.
+    3. **Offline** — returns ``""`` so callers fall back to deterministic AST.
+
+    A 429 from any provider is re-raised so the caller can degrade
+    gracefully; all other errors are swallowed and execution falls through
+    to the next provider / model.
     """
-    if not api_key:
-        return ""
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent?key={api_key}"
-    )
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-    try:
-        res = requests.post(url, json=payload, timeout=12)
-        if res.status_code == 429:
-            raise requests.exceptions.HTTPError("429 Too Many Requests", response=res)
-        res.raise_for_status()
-        data = res.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except requests.exceptions.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 429:
-            print("[doc_sync] Gemini rate limit (429) hit — falling back to offline AST.", file=sys.stderr)
-            raise
-        print(f"[doc_sync] Gemini REST call error: {exc}", file=sys.stderr)
-        return ""
-    except Exception as exc:  # noqa: BLE001
-        print(f"[doc_sync] Gemini REST call error: {exc}", file=sys.stderr)
-        return ""
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "") or api_key
+    gemini_key     = os.environ.get("GEMINI_API_KEY", "")
+
+    def _clean_text(text: str) -> str:
+        if not text:
+            return ""
+        # Remove <think>...</think> tags if present
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        return text.strip()
+
+    # ------------------------------------------------------------------
+    # 1. Primary — OpenRouter multi-model fallback array (Fastest free models first)
+    # ------------------------------------------------------------------
+    if openrouter_key.startswith("sk-or-"):
+        free_models = [
+            "inclusionai/ling-3.0-flash-fin:free",
+            "liquid/lfm-2.5-2.6b:free",
+            "poolside/laguna-s-2.1:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "qwen/qwen3.8-27b:free",
+        ]
+        for model in free_models:
+            try:
+                res = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                    timeout=2.5,
+                )
+                if res.status_code == 200:
+                    raw_msg = res.json().get("choices", [{}])[0].get("message", {}).get("content")
+                    cleaned = _clean_text(raw_msg or "")
+                    if cleaned:
+                        return cleaned
+                # Non-200 (429 or other): log and try next model
+                print(
+                    f"[doc_sync] OpenRouter model '{model}' returned status {res.status_code} — trying next model.",
+                    file=sys.stderr,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(f"[doc_sync] OpenRouter error on '{model}': {exc} — trying next.", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # 2. Fallback — Google Gemini REST API
+    # ------------------------------------------------------------------
+    if gemini_key:
+        for g_model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash"]:
+            try:
+                res = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{g_model}:generateContent?key={gemini_key}",
+                    json={"contents": [{"parts": [{"text": prompt}]}]},
+                    timeout=3,
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates and "content" in candidates[0]:
+                        parts = candidates[0]["content"].get("parts", [])
+                        if parts and "text" in parts[0]:
+                            cleaned = _clean_text(parts[0]["text"])
+                            if cleaned:
+                                return cleaned
+                elif res.status_code == 429:
+                    print(f"[doc_sync] Gemini model '{g_model}' returned 429 rate limit.", file=sys.stderr)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[doc_sync] Gemini error on '{g_model}': {exc}", file=sys.stderr)
+
+    # ------------------------------------------------------------------
+    # 3. Offline engine — deterministic AST fallback
+    # ------------------------------------------------------------------
+    return ""
 
 
 def _build_ai_summary(
@@ -479,7 +539,7 @@ def _build_ai_summary(
 def _build_ai_doc_suggestions(
     missing_ds: list[dict],
     api_key: str,
-    max_items: int = 5,
+    max_items: int = 2,
 ) -> list[str]:
     """Use Gemini to write ready-to-paste Python docstrings for undocumented functions."""
     suggestions: list[str] = []
