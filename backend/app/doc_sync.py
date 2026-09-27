@@ -57,7 +57,22 @@ from .ast_parser import parse_repo
 # Workspace root (mirrors main.py)
 # ---------------------------------------------------------------------------
 
-_WORKSPACE_DIR = Path(__file__).resolve().parent.parent.parent / "workspace"
+import tempfile
+
+def _get_workspace_dir() -> Path:
+    ws = Path(__file__).resolve().parent.parent.parent / "workspace"
+    try:
+        ws.mkdir(parents=True, exist_ok=True)
+        test = ws / ".write_test"
+        test.touch()
+        test.unlink()
+        return ws
+    except Exception:
+        tmp_ws = Path(tempfile.gettempdir()) / "workspace"
+        tmp_ws.mkdir(parents=True, exist_ok=True)
+        return tmp_ws
+
+_WORKSPACE_DIR = _get_workspace_dir()
 
 # ---------------------------------------------------------------------------
 # Data-classes

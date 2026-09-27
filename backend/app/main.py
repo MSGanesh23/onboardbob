@@ -26,8 +26,22 @@ from .doc_sync import DriftReport, _gemini_generate, run_doc_drift
 from .git_pr_service import create_pr_branch
 from .git_service import clone_github_repo, fetch_github_issue
 
-# Root of the workspace/ directory (two levels up from this file: backend/app/ → project root)
-_WORKSPACE_DIR = Path(__file__).resolve().parent.parent.parent / "workspace"
+import tempfile
+
+def _get_workspace_dir() -> Path:
+    ws = Path(__file__).resolve().parent.parent.parent / "workspace"
+    try:
+        ws.mkdir(parents=True, exist_ok=True)
+        test = ws / ".write_test"
+        test.touch()
+        test.unlink()
+        return ws
+    except Exception:
+        tmp_ws = Path(tempfile.gettempdir()) / "workspace"
+        tmp_ws.mkdir(parents=True, exist_ok=True)
+        return tmp_ws
+
+_WORKSPACE_DIR = _get_workspace_dir()
 
 app = FastAPI(
     title="OnboardBob API",

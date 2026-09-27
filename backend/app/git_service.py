@@ -12,8 +12,23 @@ from typing import Any
 
 import requests
 
-# Root directory where repositories are cloned.
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / "workspace"
+import tempfile
+
+# Root directory where repositories are cloned (with /tmp fallback for serverless read-only filesystems)
+def _get_workspace_root() -> Path:
+    ws = Path(__file__).resolve().parents[2] / "workspace"
+    try:
+        ws.mkdir(parents=True, exist_ok=True)
+        test = ws / ".write_test"
+        test.touch()
+        test.unlink()
+        return ws
+    except Exception:
+        tmp_ws = Path(tempfile.gettempdir()) / "workspace"
+        tmp_ws.mkdir(parents=True, exist_ok=True)
+        return tmp_ws
+
+WORKSPACE_ROOT = _get_workspace_root()
 
 
 # ---------------------------------------------------------------------------
