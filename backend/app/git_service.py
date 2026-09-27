@@ -35,11 +35,52 @@ WORKSPACE_ROOT = _get_workspace_root()
 # clone_github_repo
 # ---------------------------------------------------------------------------
 
+import io
+import shutil
+import zipfile
+
+def _download_repo_zip(repo_url: str, target_dir: Path) -> None:
+    """Download public GitHub repository ZIP archive when git binary is unavailable."""
+    clean_url = repo_url.rstrip("/").removesuffix(".git")
+    parts = clean_url.split("/")
+    if len(parts) < 2:
+        raise ValueError(f"Invalid repo URL for zip download: {repo_url}")
+    owner, repo = parts[-2], parts[-1]
+    
+    # Try zipball endpoint first (handles default branch main/master automatically)
+    zip_url = f"https://api.github.com/repos/{owner}/{repo}/zipball"
+    res = requests.get(zip_url, headers={"User-Agent": "OnboardBob"}, timeout=15)
+    
+    if res.status_code != 200:
+        # Fall back to main.zip
+        zip_url = f"https://github.com/{owner}/{repo}/archive/refs/heads/main.zip"
+        res = requests.get(zip_url, headers={"User-Agent": "OnboardBob"}, timeout=15)
+        res.raise_for_status()
+
+    # Extract zip contents into target_dir
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        root_prefix = zf.namelist()[0].split("/")[0] + "/"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for member in zf.infolist():
+            if not member.filename.startswith(root_prefix):
+                continue
+            relative_path = member.filename[len(root_prefix):]
+            if not relative_path:
+                continue
+            dest_path = target_dir / relative_path
+            if member.is_dir():
+                dest_path.mkdir(parents=True, exist_ok=True)
+            else:
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(member) as src, open(dest_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
 def clone_github_repo(repo_url: str) -> Path:
     """Clone a public GitHub repository into ``workspace/<repo_name>/``.
 
     If the target directory already exists the clone is skipped and the
-    existing path is returned (idempotent).
+    existing path is returned (idempotent). If the ``git`` binary is missing
+    (e.g. on serverless environments), downloads and extracts the repo ZIP.
 
     Args:
         repo_url: HTTPS or SSH URL of the repository, e.g.
@@ -47,10 +88,6 @@ def clone_github_repo(repo_url: str) -> Path:
 
     Returns:
         Absolute :class:`~pathlib.Path` to the cloned repository root.
-
-    Raises:
-        ValueError: If *repo_url* does not look like a GitHub URL.
-        subprocess.CalledProcessError: If ``git clone`` exits non-zero.
     """
     if not re.search(r"(?:^|[@/])github\.com[:/].+/.+", repo_url):
         raise ValueError(f"Not a recognisable GitHub URL: {repo_url!r}")
@@ -64,12 +101,17 @@ def clone_github_repo(repo_url: str) -> Path:
         return target_dir
 
     WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "clone", "--depth", "1", repo_url, str(target_dir)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", "1", repo_url, str(target_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"[git_service] git CLI error or missing: {exc} — falling back to GitHub API zip download.")
+        _download_repo_zip(repo_url, target_dir)
+
     return target_dir
 
 
